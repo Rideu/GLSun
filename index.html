@@ -1,0 +1,266 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <script src="index.js" type="text/javascript"/></script>
+</head>
+<body>
+  <input type="range" min="1" max="100" value="1" class="slider" id="stage"/>
+  <input type="range" min="1" max="100" value="50" class="slider" id="val1"/>
+  <input type="range" min="1" max="100" value="50" class="slider" id="val2"/>
+  <input type="checkbox" min="1" max="100" value="93" class="slider" id="check" checked/>
+  <canvas width="1200" height="600">Your browser does not seem to support 
+    HTML5 canvas.</canvas>
+  <script type="x-shader/x-vertex" id="vertex-shader">
+#version 100
+precision highp float;
+
+attribute vec4 position;
+
+void main() {
+  gl_Position = position;
+  gl_PointSize = (580.0);
+}
+</script>
+  <script type="x-shader/x-fragment" id="fragment-shader">
+#version 100
+precision mediump float;
+
+// Modulo 289, optimizes to code without divisions
+vec3 mod289(vec3 x) {
+  return x - floor(x * (1.0 / 289.0)) * 289.0;
+}
+
+// Permutation polynomial (ring size 289 = 17*17)
+vec3 permute(vec3 x) {
+  return mod289(((x*34.0)+1.0)*x);
+}
+
+vec4 mod289(vec4 x) {
+  return x - floor(x * (1.0 / 289.0)) * 289.0; }
+
+float mod289(float x) {
+  return x - floor(x * (1.0 / 289.0)) * 289.0; }
+
+vec4 permute(vec4 x) {
+     return mod289(((x*34.0)+1.0)*x);
+}
+
+float permute(float x) {
+     return mod289(((x*34.0)+1.0)*x);
+}
+
+// Hashed 2-D gradients with an extra rotation.
+// (The constant 0.0243902439 is 1/41)
+vec2 rgrad2(vec2 p, float rot) {
+#if 0
+// Map from a line to a diamond such that a shift maps to a rotation.
+  float u = permute(permute(p.x) + p.y) * 0.243902439 + rot; // Rotate by shift
+  u = 4.0 * fract(u) - 2.0;
+  // (This vector could be normalized, exactly or approximately.)
+  return vec2(abs(u)-1.0, abs(abs(u+1.0)-2.0)-1.0);
+#else
+// For more isotropic gradients, sin/cos can be used instead.
+  float u = permute(permute(p.x) + p.y) * 0.243902439 + rot; // Rotate by shift
+  u = fract(u) * 6.28318530718; // 2*pi
+  return vec2(cos(u), sin(u));
+#endif
+}
+
+//
+// 2-D tiling simplex noise with rotating gradients and analytical derivative.
+// The first component of the 3-element return vector is the noise value,
+// and the second and third components are the x and y partial derivatives.
+//
+vec3 psrdnoise(vec2 pos, vec2 per, float rot) {
+  // Hack: offset y slightly to hide some rare artifacts
+  pos.y += 0.01;
+  // Skew to hexagonal grid
+  vec2 uv = vec2(pos.x + pos.y*0.5, pos.y);
+  
+  vec2 i0 = floor(uv);
+  vec2 f0 = fract(uv);
+  // Traversal order
+  vec2 i1 = (f0.x > f0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+
+  // Unskewed grid points in (x,y) space
+  vec2 p0 = vec2(i0.x - i0.y * 0.5, i0.y);
+  vec2 p1 = vec2(p0.x + i1.x - i1.y * 0.5, p0.y + i1.y);
+  vec2 p2 = vec2(p0.x + 0.5, p0.y + 1.0);
+
+  // Integer grid point indices in (u,v) space
+  i1 = i0 + i1;
+  vec2 i2 = i0 + vec2(1.0, 1.0);
+
+  // Vectors in unskewed (x,y) coordinates from
+  // each of the simplex corners to the evaluation point
+  vec2 d0 = pos - p0;
+  vec2 d1 = pos - p1;
+  vec2 d2 = pos - p2;
+
+  // Wrap i0, i1 and i2 to the desired period before gradient hashing:
+  // wrap points in (x,y), map to (u,v)
+  vec3 xw = mod(vec3(p0.x, p1.x, p2.x), per.x);
+  vec3 yw = mod(vec3(p0.y, p1.y, p2.y), per.y);
+  vec3 iuw = xw + 0.5 * yw;
+  vec3 ivw = yw;
+  
+  // Create gradients from indices
+  vec2 g0 = rgrad2(vec2(iuw.x, ivw.x), rot);
+  vec2 g1 = rgrad2(vec2(iuw.y, ivw.y), rot);
+  vec2 g2 = rgrad2(vec2(iuw.z, ivw.z), rot);
+
+  // Gradients dot vectors to corresponding corners
+  // (The derivatives of this are simply the gradients)
+  vec3 w = vec3(dot(g0, d0), dot(g1, d1), dot(g2, d2));
+  
+  // Radial weights from corners
+  // 0.8 is the square of 2/sqrt(5), the distance from
+  // a grid point to the nearest simplex boundary
+  vec3 t = 0.8 - vec3(dot(d0, d0), dot(d1, d1), dot(d2, d2));
+
+  // Partial derivatives for analytical gradient computation
+  vec3 dtdx = -2.0 * vec3(d0.x, d1.x, d2.x);
+  vec3 dtdy = -2.0 * vec3(d0.y, d1.y, d2.y);
+
+  // Set influence of each surflet to zero outside radius sqrt(0.8)
+  if (t.x < 0.0) {
+    dtdx.x = 0.0;
+    dtdy.x = 0.0;
+	t.x = 0.0;
+  }
+  if (t.y < 0.0) {
+    dtdx.y = 0.0;
+    dtdy.y = 0.0;
+	t.y = 0.0;
+  }
+  if (t.z < 0.0) {
+    dtdx.z = 0.0;
+    dtdy.z = 0.0;
+	t.z = 0.0;
+  }
+
+  // Fourth power of t (and third power for derivative)
+  vec3 t2 = t * t;
+  vec3 t4 = t2 * t2;
+  vec3 t3 = t2 * t;
+  
+  // Final noise value is:
+  // sum of ((radial weights) times (gradient dot vector from corner))
+  float n = dot(t4, w);
+  
+  // Final analytical derivative (gradient of a sum of scalar products)
+  vec2 dt0 = vec2(dtdx.x, dtdy.x) * 4.0 * t3.x;
+  vec2 dn0 = t4.x * g0 + dt0 * w.x;
+  vec2 dt1 = vec2(dtdx.y, dtdy.y) * 4.0 * t3.y;
+  vec2 dn1 = t4.y * g1 + dt1 * w.y;
+  vec2 dt2 = vec2(dtdx.z, dtdy.z) * 4.0 * t3.z;
+  vec2 dn2 = t4.z * g2 + dt2 * w.z;
+
+  return 11.0*vec3(n, dn0 + dn1 + dn2);
+}
+
+//
+// 2-D tiling simplex noise with fixed gradients
+// and analytical derivative.
+// This function is implemented as a wrapper to "psrdnoise",
+// at the minimal cost of three extra additions.
+//
+vec3 psdnoise(vec2 pos, vec2 per) {
+  return psrdnoise(pos, per, 0.0);
+}
+
+vec3 psdnoise(vec2 pos, vec2 per, float rot) {
+  return psrdnoise(pos, per, rot);
+}
+  
+vec3 psdnoise(float x, float y, float px, float py)
+{
+  return psdnoise(vec2(x,y), vec2(px, py));
+}
+
+vec3 psdnoise(float x, float y, float px, float py, float rot)
+{
+  return psdnoise(vec2(x,y), vec2(px, py), rot);
+}
+
+
+vec3 oct(vec4 uv, float rot)
+{
+    float maxAmp = 0.0;
+    float amp = 2.0;
+    float freq = .5;
+    vec3 noise = vec3(0.0);
+
+    
+    for(int i = 0; i < 3; ++i)
+	{
+	
+        noise += psdnoise(uv.x*freq, uv.y*freq, uv.z*freq, uv.w*freq, rot) * amp;
+        maxAmp += amp;
+        amp *= 2.0;
+        freq *= 4.5;
+	}
+	
+    noise /= maxAmp;
+ 
+    noise = noise * ((1.8 - 1.0) / 2.0 + (1.8 + 1.0) / 2.0);
+
+    return noise;
+}
+
+vec3 oct(float x, float y, float z, float w, float rot)
+{
+	return oct(vec4(x,y,z,w), rot);
+}
+
+
+float tile = 20.0;
+uniform float stage;
+uniform float val1;
+uniform float val2;
+
+vec2 flarity = vec2(0.2);
+float fflarity = 2.0;
+float pi = acos(-1.0);
+
+void main() {
+	//vec3 v3 = oct(gl_PointCoord.x*16.0,gl_PointCoord.y*16.0, stage*0.075, 8)*(.2);
+	//vec3 v2 = oct(gl_PointCoord.x*2.0,gl_PointCoord.y*2.0, stage*0.007+v3, 8)*(1.8*v3);
+	float astage = stage * 0.8;
+	
+	float x = 2.5 * val2 * (gl_PointCoord.x - 0.5);
+	float y = 2.5 * val2 * (gl_PointCoord.y - 0.5);
+	float r = sqrt(x * x + y * y);
+
+	float d = r < 1.0 ? asin(r) / r : 0.0;
+	float x2 = d * x;
+	float y2 = d * y;
+	
+	float x3 = mod(x2 / (4.0 * pi) + 0.5 + astage*0.05, 1.0);
+	float y3 = y2 / (2.0 * pi) + 0.5;
+	if (r < 1.0)
+	//if(false)
+	{
+		vec3 v2 = oct(x3*tile,y3*tile, tile/4.0, tile/4.0, -astage+0.25)*(5.0);
+		vec3 v1 = oct(x3*tile,y3*tile, tile/4.0, tile/4.0, -astage+0.25)*(1.0*v2.x);
+		vec3 v0 = oct(x3*tile,y3*tile/2.0, tile/2.0, tile, astage+0.25)*(.4+v1.x/3.);
+		gl_FragColor =  vec4(v0.x*1.15+2.7+v1.x*1.1,v0.x*0.5+0.85+v1.x*0.25,v0.x*0.3+.2, 1.0);
+		//gl_FragColor +=  vec4(v0.x*1.15+2.7+v1.x*1.1,v0.x*0.5+0.85+v1.x*0.25,v0.x*0.3+.2, r);
+	}
+	else
+	{
+		//r/= 1.625;
+		//float l = mix(-5.25,4.35,r);
+		float l = (-r*r+1.7);
+		l = l > 0.?l:0.;
+		l*=2.;
+		vec3 v2 = oct(gl_PointCoord.x*tile/4.0 * val2,gl_PointCoord.y*tile/4.0 * val2, tile, tile, astage+0.15)*l*0.8;
+		gl_FragColor =  vec4(v2.x*1.1,v2.x*0.6,v2.x*0.1,1.);
+		gl_FragColor +=  vec4(1.15*l,0.7*l,0.24*l,1.)*2.5;
+	} 
+}
+  </script>
+</body>
+</html>
