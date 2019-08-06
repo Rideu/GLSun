@@ -27,6 +27,13 @@ void main() {
 #version 100
 precision mediump float;
 
+//Attribution:
+//This is a derivative work done with:
+//
+//https://github.com/stegu/webgl-noise
+//
+//Some pieces of code may be licensed under their respective licenses
+
 // Modulo 289, optimizes to code without divisions
 vec3 mod289(vec3 x) {
   return x - floor(x * (1.0 / 289.0)) * 289.0;
